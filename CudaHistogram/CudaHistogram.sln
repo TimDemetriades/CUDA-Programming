@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.30611.23
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CudaHistogram", "CudaHistogram.vcxproj", "{F4491557-98DF-4D83-AFD7-E76EDEB518C2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F4491557-98DF-4D83-AFD7-E76EDEB518C2}.Debug|x64.ActiveCfg = Debug|x64
+		{F4491557-98DF-4D83-AFD7-E76EDEB518C2}.Debug|x64.Build.0 = Debug|x64
+		{F4491557-98DF-4D83-AFD7-E76EDEB518C2}.Release|x64.ActiveCfg = Release|x64
+		{F4491557-98DF-4D83-AFD7-E76EDEB518C2}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {DC0C0A2B-D3C1-4D8A-BAB2-3BEE91237B69}
+	EndGlobalSection
+EndGlobal
