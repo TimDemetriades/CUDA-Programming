@@ -1,8 +1,22 @@
+// CUDA Matrix Multiplication with Tiling Algorithm
+// Tim Demetriades
+// CPE 810 - GPU & Multicore Programming
+// Professor Feng
+// Stevens Institute of Technology
 
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include "helper_cuda.h"
+
+//for __syncthreads()
+#ifndef __CUDACC__ 
+#define __CUDACC__
+#endif
+#include <device_functions.h>
 
 #include <stdio.h>
+#include <cstdlib>
+#include <time.h>
 
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
 
