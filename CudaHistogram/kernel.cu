@@ -16,26 +16,24 @@
 
 #include <stdio.h>
 #include <cstdlib>
-#include <time.h>
+#include <time.h>	// for CPU timer
+#include <math.h>	// for power function
 
 // Statically allocate shared memory
 //#define SHARED_MEM_SIZE 16 * 16	// Dimensions of each block/tile
 
 // Kernel function for Histogram Computation
-__global__ void Histogram_GPU(unsigned int* device_input, unsigned int* device_bins, unsigned int input_size, unsigned int num_bins) {
+__global__ void Histogram_GPU(unsigned int* device_input, unsigned int* device_bins, unsigned int input_size, unsigned int bin_size) {
 
 	// Get thread id
 	unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-	int DIV = 1024 / num_bins;
+	// Method using interleaved portioning (memory coalescing)
 
-	//printf("tid = %d\n", tid);
-	//printf("input_size = %d\n", input_size);
-
-	// Boundary condition
-	if (tid < input_size) {
-		int bin = device_input[tid] / DIV;
-		atomicAdd(&device_bins[bin], 1);
+	for (unsigned int i = tid; i < input_size; i += blockDim.x * gridDim.x) {	// blockDim.x * gridDim.x = total number of threads for each kernel invocation
+		if (tid < input_size) {	// Boundary condition
+			atomicAdd(&device_bins[device_input[i] / bin_size], 1);
+		}
 	}
 }
 
@@ -49,29 +47,35 @@ void Histogram_CPU(unsigned int* host_input, unsigned int input_size, unsigned i
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char* argv[]) {
+	int num_bins = 0;
+	int input_size = 0;
+
 	if (argc == 4) {		// 4 arguments expected (filename, -i, <BinNum>, <VecDim>)
-		printf("\n");
-		printf("There will be %s bins \n", argv[2]);
-		printf("Input vector is %s elements long \n", argv[3]);
+		int bin_exponent = atoi(argv[2]);
+		if (bin_exponent < 2 || bin_exponent > 8) {
+			printf("\nPlease make sure <BinNum> is between 2 and 8.\n");
+			exit(EXIT_FAILURE);
+		}
+		// Set number of bins 
+		num_bins = pow(2, bin_exponent);
+		printf("\nThere will be %d bins \n", num_bins);
+
+		// Set number of input elements
+		input_size = atoi(argv[3]);
+		printf("Input vector is %d elements long \n", input_size);
 	}
 	else if (argc > 4) {
-		printf("Too many arguments provided. \n");
+		printf("\nToo many arguments provided. \n");
 		printf("Enter arguments like this: \n");
 		printf("-i <BinNum> <VecDim> \n");
 		exit(EXIT_FAILURE);
 	}
 	else {
-		printf("3 arguments expected. \n");
+		printf("\n3 arguments expected. \n");
 		printf("Enter arguments like this: \n");
 		printf("-i <BinNum> <VecDim> \n");
 		exit(EXIT_FAILURE);
 	}
-
-	// Set number of bins
-	int num_bins = atoi(argv[2]);
-
-	// Set number of input elements
-	int input_size = atoi(argv[3]);
 
 	// Set number of elements per bin
 	unsigned int bin_size = 1024 / num_bins;		// 1024 is the max possible input element
@@ -103,28 +107,26 @@ int main(int argc, char* argv[]) {
 		host_input[i] = rand() % 1025;
 	}
 
-	//// Initialize bins with 0s
-	//for (int i = 0; i < num_bins; i++) {
-	//	host_bins[i] = 0;
-	//}
-
 	// Initialize bins with 0s
+	for (int i = 0; i < num_bins; i++) {
+		host_bins[i] = 0;
+	}
 	for (int i = 0; i < num_bins; i++) {
 		host_bins_cpu[i] = 0;
 	}
 
 	// Print input vector
-	printf("\nInput vector:\n");
+	/*printf("\nInput vector:\n");
 	for (int i = 0; i < input_size; i++) {
 		printf("%d\t", host_input[i]);
-	}
+	}*/
 
 	// Copy matrix values from host to device
 	checkCudaErrors(cudaMemcpy(device_input, host_input, input_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
 	//checkCudaErrors(cudaMemcpy(device_bins, host_bins, input_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
 
 	// Set Grid and Block sizes
-	int block_size = 16;		// Threads per block
+	int block_size = 32;		// Threads per block
 	int grid_size = ceil(input_size / block_size) + 1;
 	dim3 dim_block(block_size, block_size);
 	dim3 dim_grid(grid_size, grid_size);
@@ -146,10 +148,10 @@ int main(int argc, char* argv[]) {
 
 	// Launch kernel (repeat nIter times so we can obtain average run time)
 	for (int i = 0; i < nIter; i++) {
-		Histogram_GPU<<<dim_grid, dim_block>>>(device_input, device_bins, input_size, num_bins);
+		Histogram_GPU<<<dim_grid, dim_block>>>(device_input, device_bins, input_size, bin_size);
 	}
 
-	printf("\n\nGPU Histogram Computation Complete\n");
+	printf("\n\GPU Histogram Computation Complete\n");
 
 	// Record the stop event
 	checkCudaErrors(cudaEventRecord(stop, stream));
@@ -162,26 +164,32 @@ int main(int argc, char* argv[]) {
 
 	// Compute and print the performance
 	float msecPerHistogram = msecTotal / nIter;
-	printf("\nTime = %.3f msec\n", msecPerHistogram);
+	printf("\nGPU Histogram Computation took %.3f msec\n", msecPerHistogram);
 
 	// Copy matrix values from device to host
 	checkCudaErrors(cudaMemcpy(host_bins, device_bins, bin_bytes, cudaMemcpyDeviceToHost));
 
-	/*for (int i = 0; i < num_bins; i++) {
-		printf("\nBin Output = %d", host_bins[i]);
+	// Print GPU results
+	printf("\nGPU Results: \n");
+	for (int i = 0; i < num_bins; i++) {
+		printf("\nBins %d = %u", i, host_bins[i]);
 	}
 
-	int tmp = 0;
-	for (int i = 0; i < num_bins; i++) {
-		tmp += host_bins[i];
-	}*/
-
-	//printf("\nOutput = %d", tmp);
+	//Start CPU timer
+	double time_taken_cpu = 0.0;
+	clock_t begin_cpu = clock();
 
 	// Calculate histogram on CPU
+	printf("\n\nStarting Histogram Computation on CPU\n");
 	Histogram_CPU(host_input, input_size, bin_size, host_bins_cpu);
+	printf("\nCPU Histogram Computation Complete\n");
+
+	clock_t end_cpu = clock();
+	time_taken_cpu += (double)(end_cpu - begin_cpu) / CLOCKS_PER_SEC * 1000;	// in milliseconds
+	printf("\nCPU Histogram Computation took %f millisecond(s) to execute. \n", time_taken_cpu);
 
 	// Print CPU results
+	printf("\nCPU Results: \n");
 	for (int i = 0; i < num_bins; i++) {
 		printf("\nBins %d = %u", i, host_bins_cpu[i]);
 	}
@@ -190,7 +198,7 @@ int main(int argc, char* argv[]) {
 	for (int i = 0; i < num_bins; i++) {
 		sum_bins_cpu += host_bins_cpu[i];
 	}
-	printf("\nSummation of all the bins = %d", sum_bins_cpu);
+	printf("\n\nSummation of all the bins = %d\n", sum_bins_cpu);
 
 	// Free memory in device
 	checkCudaErrors(cudaFree(device_input));
