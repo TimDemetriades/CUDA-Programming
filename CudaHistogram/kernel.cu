@@ -8,7 +8,7 @@
 #include <device_launch_parameters.h>
 #include "helper_cuda.h"
 
-//for __syncthreads()
+//for __syncthreads() and atomicadd
 #ifndef __CUDACC__ 
 #define __CUDACC__
 #endif
@@ -24,12 +24,10 @@
 // Kernel function for Histogram Computation
 __global__ void Histogram_Computation(unsigned int* device_input, unsigned int* device_bins, unsigned int input_size, unsigned int num_bins) {
 
-	printf("Test");
-
 	// Get thread id
 	unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-	int DIV = (input_size + num_bins - 1) / num_bins;
+	int DIV = 1024 / num_bins;
 
 	//printf("tid = %d\n", tid);
 	//printf("input_size = %d\n", input_size);
@@ -38,7 +36,14 @@ __global__ void Histogram_Computation(unsigned int* device_input, unsigned int* 
 	if (tid < input_size) {
 		int bin = device_input[tid] / DIV;
 		atomicAdd(&device_bins[bin], 1);
-		printf("Test");
+	}
+}
+
+void Histogram_CPU(unsigned int* host_input, unsigned int input_size, unsigned int num_bin, unsigned int * host_bins) {
+	unsigned int bin_size = 1024 / num_bin;
+	printf("\nBin size = %d", bin_size);
+	for (int i = 0; i < input_size; i++) {
+		host_bins[host_input[i] / bin_size]++;
 	}
 }
 
@@ -66,16 +71,16 @@ int main(int argc, char* argv[]) {
 	printf("\nStarting Histogram Computation on GPU\n");
 
 	// Set number of bins
-	int num_bins_string;
+	/*int num_bins_string;
 	num_bins_string = atoi(argv[2]);
-	int num_bins = num_bins_string;
-	//int num_bins = atoi(argv[2]);
+	int num_bins = num_bins_string;*/
+	int num_bins = atoi(argv[2]);
 
 	// Set number of input elements
-	int input_size_string;
+	/*int input_size_string;
 	input_size_string = atoi(argv[3]);
-	int input_size = input_size_string;
-	//int input_size = atoi(argv[3]);
+	int input_size = input_size_string;*/
+	int input_size = atoi(argv[3]);
 
 	// Set number of elements per bin
 	int bin_size = ceil(input_size / num_bins);		// Padded in case num of bins does not equally divide num of input elements
@@ -90,8 +95,10 @@ int main(int argc, char* argv[]) {
 	// Allocate host memory for input vector and bins
 	unsigned int* host_input;
 	unsigned int* host_bins;
+	unsigned int* host_bins_cpu;
 	host_input = (unsigned int*)malloc(input_bytes);
 	host_bins = (unsigned int*)malloc(bin_bytes);
+	host_bins_cpu = (unsigned int*)malloc(bin_bytes);
 
 	// Allocate device memory for input vector and bins
 	unsigned int* device_input;
@@ -100,13 +107,19 @@ int main(int argc, char* argv[]) {
 	checkCudaErrors(cudaMalloc((void**)&device_bins, bin_bytes));
 
 	// Initialize input vector with ints between 0~1024
+	srand((unsigned int)time(NULL));		// Assigns seed to make random numbers change
 	for (int i = 0; i < input_size; i++) {
 		host_input[i] = rand() % 1025;
 	}
 
+	//// Initialize bins with 0s
+	//for (int i = 0; i < num_bins; i++) {
+	//	host_bins[i] = 0;
+	//}
+
 	// Initialize bins with 0s
 	for (int i = 0; i < num_bins; i++) {
-		host_bins[i] = 0;
+		host_bins_cpu[i] = 0;
 	}
 
 	// Print input vector
@@ -115,24 +128,12 @@ int main(int argc, char* argv[]) {
 		printf("%d\t", host_input[i]);
 	}
 
-	// Print input vector
-	printf("\nBins:\n");
-	for (int i = 0; i < num_bins; i++) {
-		printf("%d\t", host_bins[i]);
-	}
-
 	// Copy matrix values from host to device
 	checkCudaErrors(cudaMemcpy(device_input, host_input, input_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
-	checkCudaErrors(cudaMemcpy(device_bins, host_bins, bin_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
-
-	//// Print input vector
-	//printf("\nInput vector - Device:\n");
-	//for (int i = 0; i < input_size; i++) {
-	//	printf("%d\t", device_bins[i]);
-	//}
+	//checkCudaErrors(cudaMemcpy(device_bins, host_bins, input_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
 
 	// Set Grid and Block sizes
-	int block_size = 512;		// Threads per block
+	int block_size = 16;		// Threads per block
 	int grid_size = ceil(input_size / block_size) + 1;
 	dim3 dim_block(block_size, block_size);
 	dim3 dim_grid(grid_size, grid_size);
@@ -148,15 +149,14 @@ int main(int argc, char* argv[]) {
 	checkCudaErrors(cudaStreamSynchronize(stream));
 	checkCudaErrors(cudaEventRecord(start, stream));
 
-	int nIter = 100;	// How many times to run kernel
+	int nIter = 1;	// How many times to run kernel
 
 	// Launch kernel (repeat nIter times so we can obtain average run time)
 	for (int i = 0; i < nIter; i++) {
-		Histogram_Computation << < dim_grid, dim_block >> > (device_input, device_bins, input_size, num_bins);
-		checkCudaErrors(cudaDeviceSynchronize());
+		Histogram_Computation<<<dim_grid, dim_block>>>(device_input, device_bins, input_size, num_bins);
 	}
 
-	printf("\nGPU Histogram Computation Complete\n");
+	printf("\n\nGPU Histogram Computation Complete\n");
 
 	// Record the stop event
 	checkCudaErrors(cudaEventRecord(stop, stream));
@@ -174,16 +174,23 @@ int main(int argc, char* argv[]) {
 	// Copy matrix values from device to host
 	checkCudaErrors(cudaMemcpy(host_bins, device_bins, bin_bytes, cudaMemcpyDeviceToHost));
 
-	for (int i = 0; i < num_bins; i++) {
+	/*for (int i = 0; i < num_bins; i++) {
 		printf("\nBin Output = %d", host_bins[i]);
 	}
 
 	int tmp = 0;
 	for (int i = 0; i < num_bins; i++) {
 		tmp += host_bins[i];
-	}
+	}*/
 
-	printf("\nOutput = %d", tmp);
+	//printf("\nOutput = %d", tmp);
+
+	//unsigned int* host_input, unsigned int input_size, unsigned int num_bin, unsigned int * host_bins
+	Histogram_CPU(host_input, input_size, num_bins, host_bins_cpu);
+
+	for (int i = 0; i < num_bins; i++) {
+		printf("\nBins %u = %u", i, host_bins_cpu[i]);
+	}
 
 	// Free memory in device
 	checkCudaErrors(cudaFree(device_input));
