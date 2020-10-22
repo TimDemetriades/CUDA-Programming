@@ -22,7 +22,7 @@
 //#define SHARED_MEM_SIZE 16 * 16	// Dimensions of each block/tile
 
 // Kernel function for Histogram Computation
-__global__ void Histogram_Computation(unsigned int* device_input, unsigned int* device_bins, unsigned int input_size, unsigned int num_bins) {
+__global__ void Histogram_GPU(unsigned int* device_input, unsigned int* device_bins, unsigned int input_size, unsigned int num_bins) {
 
 	// Get thread id
 	unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -39,9 +39,8 @@ __global__ void Histogram_Computation(unsigned int* device_input, unsigned int* 
 	}
 }
 
-void Histogram_CPU(unsigned int* host_input, unsigned int input_size, unsigned int num_bin, unsigned int * host_bins) {
-	unsigned int bin_size = 1024 / num_bin;
-	printf("\nBin size = %d", bin_size);
+// Histogram Computation on CPU
+void Histogram_CPU(unsigned int* host_input, unsigned int input_size, unsigned int bin_size, unsigned int * host_bins) {
 	for (int i = 0; i < input_size; i++) {
 		host_bins[host_input[i] / bin_size]++;
 	}
@@ -68,23 +67,15 @@ int main(int argc, char* argv[]) {
 		exit(EXIT_FAILURE);
 	}
 
-	printf("\nStarting Histogram Computation on GPU\n");
-
 	// Set number of bins
-	/*int num_bins_string;
-	num_bins_string = atoi(argv[2]);
-	int num_bins = num_bins_string;*/
 	int num_bins = atoi(argv[2]);
 
 	// Set number of input elements
-	/*int input_size_string;
-	input_size_string = atoi(argv[3]);
-	int input_size = input_size_string;*/
 	int input_size = atoi(argv[3]);
 
 	// Set number of elements per bin
-	int bin_size = ceil(input_size / num_bins);		// Padded in case num of bins does not equally divide num of input elements
-	//(input_size + num_bins - 1) / num_bins   ->   alternate method
+	unsigned int bin_size = 1024 / num_bins;		// 1024 is the max possible input element
+	printf("Each bin will contain %u elements\n", bin_size);
 
 	// Size in bytes of input vector
 	size_t input_bytes = input_size * sizeof(int);
@@ -151,9 +142,11 @@ int main(int argc, char* argv[]) {
 
 	int nIter = 1;	// How many times to run kernel
 
+	printf("\nStarting Histogram Computation on GPU\n");
+
 	// Launch kernel (repeat nIter times so we can obtain average run time)
 	for (int i = 0; i < nIter; i++) {
-		Histogram_Computation<<<dim_grid, dim_block>>>(device_input, device_bins, input_size, num_bins);
+		Histogram_GPU<<<dim_grid, dim_block>>>(device_input, device_bins, input_size, num_bins);
 	}
 
 	printf("\n\nGPU Histogram Computation Complete\n");
@@ -169,7 +162,7 @@ int main(int argc, char* argv[]) {
 
 	// Compute and print the performance
 	float msecPerHistogram = msecTotal / nIter;
-	printf("\nTime = %.3f msec", msecPerHistogram);
+	printf("\nTime = %.3f msec\n", msecPerHistogram);
 
 	// Copy matrix values from device to host
 	checkCudaErrors(cudaMemcpy(host_bins, device_bins, bin_bytes, cudaMemcpyDeviceToHost));
@@ -185,12 +178,19 @@ int main(int argc, char* argv[]) {
 
 	//printf("\nOutput = %d", tmp);
 
-	//unsigned int* host_input, unsigned int input_size, unsigned int num_bin, unsigned int * host_bins
-	Histogram_CPU(host_input, input_size, num_bins, host_bins_cpu);
+	// Calculate histogram on CPU
+	Histogram_CPU(host_input, input_size, bin_size, host_bins_cpu);
 
+	// Print CPU results
 	for (int i = 0; i < num_bins; i++) {
-		printf("\nBins %u = %u", i, host_bins_cpu[i]);
+		printf("\nBins %d = %u", i, host_bins_cpu[i]);
 	}
+
+	int sum_bins_cpu = 0;
+	for (int i = 0; i < num_bins; i++) {
+		sum_bins_cpu += host_bins_cpu[i];
+	}
+	printf("\nSummation of all the bins = %d", sum_bins_cpu);
 
 	// Free memory in device
 	checkCudaErrors(cudaFree(device_input));
