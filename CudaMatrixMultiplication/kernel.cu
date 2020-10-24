@@ -180,7 +180,7 @@ int main(int argc, char *argv[]) {
 	//	if ((i + 1) % colDimM == 0) {	// At end of each row make new line
 	//		printf("\n");
 	//	}
-	//}
+	//} 
 	//printf("\nMatrix N:\n");
 	//for (int i = 0; i < rowDimN * colDimN; i++) {
 	//	printf("%f\t", host_n[i]);
