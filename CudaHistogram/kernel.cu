@@ -33,6 +33,7 @@ __global__ void Histogram_GPU_1(unsigned int* device_input, unsigned int* device
 			atomicAdd(&device_bins[device_input[i] / bin_size], 1);
 		}
 	}
+
 }
 
 // Kernel function for Histogram Computation using shared memory (privatization)
@@ -190,10 +191,12 @@ int main(int argc, char* argv[]) {
 
 	// Copy matrix values from host to device
 	checkCudaErrors(cudaMemcpy(device_input, host_input, input_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
+	checkCudaErrors(cudaMemcpy(device_bins, host_bins, bin_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
 
 	// Set Grid and Block sizes
 	int block_size = 16;		// Threads per block
-	int grid_size = input_size / block_size;
+	//int grid_size = input_size / block_size;
+	int grid_size = ceil(input_size / block_size) + 1;
 	dim3 dim_block(block_size);
 	dim3 dim_grid(grid_size);
 
@@ -232,13 +235,13 @@ int main(int argc, char* argv[]) {
 
 	// Compute and print the performance
 	float msecPerHistogram = msecTotal / nIter;
-	printf("\nGPU Histogram Computation took %.3f msec\n", msecPerHistogram);
+	printf("\nGPU Histogram Computation took %.3f msec", msecPerHistogram);
 
 	// Copy matrix values from device to host
 	checkCudaErrors(cudaMemcpy(host_bins, device_bins, bin_bytes, cudaMemcpyDeviceToHost));
 
 	//// Print GPU results
-	//printf("\nGPU Results: \n");
+	//printf("\n\nGPU Results: \n");
 	//for (int i = 0; i < num_bins; i++) {
 	//	printf("\nBins %d = %u", i, host_bins[i]);
 	//}
@@ -254,7 +257,7 @@ int main(int argc, char* argv[]) {
 	clock_t begin_cpu = clock();
 
 	// Calculate histogram on CPU
-	printf("\nStarting Histogram Computation on CPU\n");
+	printf("\n\nStarting Histogram Computation on CPU\n");
 	Histogram_CPU(host_input, input_size, bin_size, host_bins_cpu);
 	printf("\nCPU Histogram Computation Complete\n");
 
