@@ -65,6 +65,7 @@ __global__ void Histogram_GPU_2(unsigned int* device_input, unsigned int* device
 }
 
 // Kernel function for Histogram Computation using shared memory (privatization) and aggregation
+// Needs some tweaks
 __global__ void Histogram_GPU_3(unsigned int* device_input, unsigned int* device_bins, unsigned long input_size, unsigned int bin_size, unsigned int num_bins) {
 
 	// Get thread id
@@ -183,20 +184,19 @@ int main(int argc, char* argv[]) {
 		host_bins_cpu[i] = 0;
 	}
 
-	// Print input vector
-	/*printf("\nInput vector:\n");
-	for (int i = 0; i < input_size; i++) {
-		printf("%d\t", host_input[i]);
-	}*/
+	//// Print input vector
+	//printf("\nInput vector:\n");
+	//for (int i = 0; i < input_size; i++) {
+	//	printf("%d\t", host_input[i]);
+	//}
 
 	// Copy matrix values from host to device
 	checkCudaErrors(cudaMemcpy(device_input, host_input, input_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
 	checkCudaErrors(cudaMemcpy(device_bins, host_bins, bin_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
 
 	// Set Grid and Block sizes
-	int block_size = 16;		// Threads per block
-	//int grid_size = input_size / block_size;
-	int grid_size = ceil(input_size / block_size) + 1;
+	int block_size = 16;									// Threads per block
+	int grid_size = ceil(input_size / block_size) + 1;		// Blocks per grid
 	dim3 dim_block(block_size);
 	dim3 dim_grid(grid_size);
 
@@ -211,14 +211,15 @@ int main(int argc, char* argv[]) {
 	checkCudaErrors(cudaStreamSynchronize(stream));
 	checkCudaErrors(cudaEventRecord(start, stream));
 
-	int nIter = 1;	// How many times to run kernel
+	int nIter = 100;	// How many times to run kernel
 
 	printf("\nStarting Histogram Computation on GPU\n");
 
 	// Launch kernel (repeat nIter times so we can obtain average run time)
+	// Leave the kernel you want to use un-commented and comment out the rest
 	for (int i = 0; i < nIter; i++) {
-		//Histogram_GPU_1<<<dim_grid, dim_block>>>(device_input, device_bins, input_size, bin_size);
-		Histogram_GPU_2<<<dim_grid, dim_block>>>(device_input, device_bins, input_size, bin_size, num_bins);
+		Histogram_GPU_1<<<dim_grid, dim_block>>>(device_input, device_bins, input_size, bin_size);
+		//Histogram_GPU_2<<<dim_grid, dim_block>>>(device_input, device_bins, input_size, bin_size, num_bins);
 		//Histogram_GPU_3<<<dim_grid, dim_block>>>(device_input, device_bins, input_size, bin_size, num_bins);
 	}
 
@@ -235,13 +236,19 @@ int main(int argc, char* argv[]) {
 
 	// Compute and print the performance
 	float msecPerHistogram = msecTotal / nIter;
-	printf("\nGPU Histogram Computation took %.3f msec", msecPerHistogram);
+	printf("\nGPU Histogram Computation took %.3f msec\n", msecPerHistogram);
+	printf("\nThreads per block = %d, Blocks per grid = %d, Total threads = %d\n", block_size, grid_size, block_size * grid_size);
 
 	// Copy matrix values from device to host
 	checkCudaErrors(cudaMemcpy(host_bins, device_bins, bin_bytes, cudaMemcpyDeviceToHost));
 
+	// Make sure bins from GPU have correct values
+	for (int i = 0; i < num_bins; i++) {
+		host_bins[i] /= nIter;
+	}
+
 	//// Print GPU results
-	//printf("\n\nGPU Results: \n");
+	//printf("\nGPU Results: \n");
 	//for (int i = 0; i < num_bins; i++) {
 	//	printf("\nBins %d = %u", i, host_bins[i]);
 	//}
@@ -257,13 +264,20 @@ int main(int argc, char* argv[]) {
 	clock_t begin_cpu = clock();
 
 	// Calculate histogram on CPU
-	printf("\n\nStarting Histogram Computation on CPU\n");
-	Histogram_CPU(host_input, input_size, bin_size, host_bins_cpu);
+	printf("\nStarting Histogram Computation on CPU\n");
+	for (int i = 0; i < nIter; i++) {		// Repeat CPU computation same amount of times as GPU computation
+		Histogram_CPU(host_input, input_size, bin_size, host_bins_cpu);
+	}
 	printf("\nCPU Histogram Computation Complete\n");
 
 	clock_t end_cpu = clock();
-	time_taken_cpu += (double)(end_cpu - begin_cpu) / CLOCKS_PER_SEC * 1000;	// in milliseconds
+	time_taken_cpu += ((double)(end_cpu - begin_cpu) / CLOCKS_PER_SEC * 1000) / nIter;	// in milliseconds
 	printf("\nCPU Histogram Computation took %.3f msec\n", time_taken_cpu);
+
+	// Make sure bins from CPU have correct values
+	for (int i = 0; i < num_bins; i++) {
+		host_bins_cpu[i] /= nIter;
+	}
 
 	//// Print CPU results
 	//printf("\nCPU Results: \n");
@@ -284,7 +298,6 @@ int main(int argc, char* argv[]) {
 			check = 1;
 		}
 	}
-
 	if (check == 1) {
 		printf("\nGPU and CPU histograms do not match!\n");
 	}
