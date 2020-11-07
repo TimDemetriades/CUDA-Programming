@@ -21,38 +21,66 @@
 #define MAX_MASK_SIZE 128							// Set max mask size (arbitrary)
 __constant__ int device_mask[MAX_MASK_SIZE];		// Initialize mask as constant memory
 
-// Kernel function for Histogram Computation using interleaved portioning (memory coalescing)
-__global__ void Convolution_GPU(unsigned int* device_input, unsigned int* device_output, unsigned int input_x, unsigned int input_y, unsigned int mask_size) {
+// Kernel function for Convolution
+// First mask runs through each row of the input matrix
+__global__ void Convolution_GPU_X(unsigned int* device_input, unsigned int* device_buffer, unsigned int input_x, unsigned int input_y, unsigned int mask_size) {
 
 	// Calculate row and column indexes for each thread (location of the thread)
-	int tid = (blockIdx.x * blockDim.x) + threadIdx.x;
-	//int col = (blockIdx.x * blockDim.x) + threadIdx.x;
-
-	//printf("tid = %d\n", tid);
+	int row = (blockIdx.y * blockDim.y) + threadIdx.y;
+	int col = (blockIdx.x * blockDim.x) + threadIdx.x;
 
 	// Start point for rows and columns
-	int row_start = tid - (mask_size / 2);
-	//int col_start = col - (mask_size / 2);
+	int row_start = row - (mask_size / 2);
 
 	// Temp value for result accumulation
 	int temp = 0;
 
 	// Convolution
 	for (int i = 0; i < mask_size; i++) {
-		if (((row_start + i) >= 0) && (row_start + i < mask_size)) {
+		if (((row_start + i) >= 0) && ((row_start + i) < input_x)) {	// Only do multiplication if we are not over ghost cells
 			temp += device_input[row_start + i] * device_mask[i];
 		}
 	}
 
-	device_output[tid] = temp;
-}
-
-// Histogram Computation on CPU
-void Histogram_CPU(unsigned int* host_input, unsigned int input_size, unsigned int bin_size, unsigned int* host_bins) {
-	for (int i = 0; i < input_size; i++) {
-		host_bins[host_input[i] / bin_size]++;
+	// Write results to buffer matrix
+	if ((row < input_y) && (col < input_x)) {
+		device_buffer[col * input_y + row] = temp;
 	}
 }
+
+// Kernel function for Convolution
+// Then mask runs through each column of the input matrix
+__global__ void Convolution_GPU_Y(unsigned int* device_buffer, unsigned int* device_output, unsigned int input_x, unsigned int input_y, unsigned int mask_size) {
+
+	// Calculate row and column indexes for each thread (location of the thread)
+	int row = (blockIdx.y * blockDim.y) + threadIdx.y;
+	int col = (blockIdx.x * blockDim.x) + threadIdx.x;
+
+	// Start point for rows and columns
+	int col_start = col - (mask_size / 2);
+
+	// Temp value for result accumulation
+	int temp = 0;
+
+	// Convolution
+	for (int i = 0; i < mask_size; i++) {
+		if (((col_start + i) >= 0) && ((col_start + i) < input_x)) {	// Only do multiplication if we are not over ghost cells
+			temp += device_buffer[col_start + i] * device_mask[i];
+		}
+	}
+
+	// Write results to output matrix
+	if ((row < input_y) && (col < input_x)) {
+		device_output[col * input_y + row] = temp;
+	}
+}
+
+//// Histogram Computation on CPU
+//void Histogram_CPU(unsigned int* host_input, unsigned int input_size, unsigned int bin_size, unsigned int* host_bins) {
+//	for (int i = 0; i < input_size; i++) {
+//		host_bins[host_input[i] / bin_size]++;
+//	}
+//}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -103,40 +131,50 @@ int main(int argc, char* argv[]) {
 	// Size in bytes of mask
 	size_t mask_bytes = mask_size * sizeof(unsigned int);
 
+	// Size in bytes of buffer matrix (output matrix of first kernel and input of second)
+	size_t buffer_bytes = input_x * input_y * sizeof(unsigned int);
+
 	// Size in bytes of output matrix (result)
 	size_t output_bytes = input_x * input_y * sizeof(unsigned int);
 
 	// Allocate host memory for input matrix, mask, and output matrix
 	unsigned int* host_input;
 	unsigned int* host_mask;
+	unsigned int* host_buffer;
 	unsigned int* host_output;
 	unsigned int* host_output_cpu;
 	host_input = (unsigned int*)malloc(input_bytes);
 	host_mask = (unsigned int*)malloc(mask_bytes);
+	host_buffer = (unsigned int*)malloc(buffer_bytes);
 	host_output = (unsigned int*)malloc(output_bytes);
 	host_output_cpu = (unsigned int*)malloc(output_bytes);
 
 	// Allocate device memory for input vector and bins
 	unsigned int* device_input;
+	unsigned int* device_buffer;
 	unsigned int* device_output;
 	checkCudaErrors(cudaMalloc((void**)&device_input, input_bytes));
+	checkCudaErrors(cudaMalloc((void**)&device_buffer, buffer_bytes));
 	checkCudaErrors(cudaMalloc((void**)&device_output, output_bytes));
 
 	// Initialize input matrix with ints between 0~15
 	srand((unsigned int)time(NULL));		// Assigns seed to make random numbers change
 	for (int i = 0; i < input_x * input_y; i++) {
-		host_input[i] = 1;
-		//host_input[i] = rand() % 16;
+		//host_input[i] = 1;
+		host_input[i] = rand() % 16;
 	}
 
 	// Initialize mask with ints between 0~15
 	srand((unsigned int)time(NULL));		// Assigns seed to make random numbers change
 	for (int i = 0; i < mask_size; i++) {
-		host_mask[i] = 1;
-		//host_mask[i] = rand() % 16;
+		//host_mask[i] = 1;
+		host_mask[i] = rand() % 16;
 	}
 	
-	// Initialize output (result) matrix with 0s
+	// Initialize output (result) and buffer matrix with 0s
+	for (int i = 0; i < input_x * input_y; i++) {
+		host_buffer[i] = 0;
+	}
 	for (int i = 0; i < input_x * input_y; i++) {
 		host_output[i] = 0;
 	}
@@ -161,6 +199,7 @@ int main(int argc, char* argv[]) {
 
 	// Copy matrix values from host to device
 	checkCudaErrors(cudaMemcpy(device_input, host_input, input_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
+	checkCudaErrors(cudaMemcpy(device_buffer, host_buffer, buffer_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
 	checkCudaErrors(cudaMemcpy(device_output, host_output, output_bytes, cudaMemcpyHostToDevice));		// dest, source, size in bytes, direction of transfer
 
 	// Copy mask values from host to device constant memory
@@ -168,9 +207,10 @@ int main(int argc, char* argv[]) {
 
 	// Set Grid and Block sizes
 	int block_size = 16;									// Threads per block
-	int grid_size = ceil(input_x * input_y / block_size) + 1;
-	dim3 dim_block(block_size);
-	dim3 dim_grid(grid_size);
+	int grid_size_x = ceil(input_x / block_size) + 1;
+	int grid_size_y = ceil(input_x / block_size) + 1;
+	dim3 dim_block(block_size, block_size);
+	dim3 dim_grid(grid_size_x, grid_size_y);
 
 	// Record the start event (for timing GPU calculations)
 	cudaStream_t stream;
@@ -190,7 +230,8 @@ int main(int argc, char* argv[]) {
 	// Launch kernel (repeat nIter times so we can obtain average run time)
 	// Leave the kernel you want to use un-commented and comment out the rest
 	for (int i = 0; i < nIter; i++) {
-		Convolution_GPU << <dim_grid, dim_block >> > (device_input, device_output, input_x, input_y, mask_size);
+		Convolution_GPU_X << <dim_grid, dim_block >> > (device_input, device_buffer, input_x, input_y, mask_size);
+		Convolution_GPU_Y << <dim_grid, dim_block >> > (device_buffer, device_output, input_x, input_y, mask_size);
 	}
 
 	printf("\n\GPU Convolution Complete\n");
@@ -207,9 +248,10 @@ int main(int argc, char* argv[]) {
 	// Compute and print the performance
 	float msecPerConvolution = msecTotal / nIter;
 	printf("\nGPU Histogram Computation took %.3f msec\n", msecPerConvolution);
-	printf("\nThreads per block = %d, Blocks per grid = %d, Total threads = %d\n", block_size, grid_size, block_size * grid_size);
+	printf("\nThreads per block = %d, Blocks per grid x = %d, Blocks per grid y = %d, Total threads = %d\n", block_size, grid_size_x, grid_size_y, block_size * (grid_size_x * grid_size_y));
 
 	// Copy matrix values from device to host
+	checkCudaErrors(cudaMemcpy(host_buffer, device_buffer, output_bytes, cudaMemcpyDeviceToHost));
 	checkCudaErrors(cudaMemcpy(host_output, device_output, output_bytes, cudaMemcpyDeviceToHost));
 
 	//// Make sure bins from GPU have correct values
@@ -218,7 +260,15 @@ int main(int argc, char* argv[]) {
 	//}
 
 	// Print GPU results
-	printf("\nGPU Results: \n");
+	printf("\nBuffer Results: \n");
+	for (int i = 0; i < input_x * input_y; i++) {
+		printf("%d\t", host_buffer[i]);
+		if ((i + 1) % input_x == 0) {		// At end of each row make a new line
+			printf("\n");
+		}
+	}
+
+	printf("\n\nGPU Results: \n");
 	for (int i = 0; i < input_x * input_y; i++) {
 		printf("%d\t", host_output[i]);
 		if ((i + 1) % input_x == 0) {		// At end of each row make a new line
@@ -274,11 +324,13 @@ int main(int argc, char* argv[]) {
 
 	// Free memory in device
 	cudaFree(device_input);
+	cudaFree(device_buffer);
 	cudaFree(device_output);
 
 	// Free memory in host
 	free(host_input);
 	free(host_mask);
+	free(host_buffer);
 	free(host_output);
 	free(host_output_cpu);
 }
