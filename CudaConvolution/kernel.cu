@@ -71,16 +71,26 @@ __global__ void Convolution_GPU_Y(unsigned int* device_buffer, unsigned int* dev
 
 	// Write results to output matrix
 	if ((row < input_y) && (col < input_x)) {
-		device_output[col * input_y + row] = temp;
+		device_output[row * input_x + col] = temp;
 	}
 }
 
-//// Histogram Computation on CPU
-//void Histogram_CPU(unsigned int* host_input, unsigned int input_size, unsigned int bin_size, unsigned int* host_bins) {
-//	for (int i = 0; i < input_size; i++) {
-//		host_bins[host_input[i] / bin_size]++;
-//	}
-//}
+// Convolution on CPU
+void Convolution_CPU(unsigned int* host_input, unsigned int* host_mask, unsigned int* host_output_cpu, unsigned int input_x, unsigned int input_y, unsigned int mask_size) {
+	int start, temp;
+	for (int row = 0; row < input_x; row++) {
+		for (int col = 0; col < input_y; col++) {
+			start = row - (mask_size / 2);
+			temp = 0;
+			for (int i = 0; i < mask_size; i++) {
+				if ((start + i >= 0) && (start + i < input_x)) {
+					temp += host_input[start + i] * host_mask[i];
+				}
+			}
+			host_output_cpu[col * input_y + row] = temp;
+		}
+	}
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -160,15 +170,15 @@ int main(int argc, char* argv[]) {
 	// Initialize input matrix with ints between 0~15
 	srand((unsigned int)time(NULL));		// Assigns seed to make random numbers change
 	for (int i = 0; i < input_x * input_y; i++) {
-		//host_input[i] = 1;
-		host_input[i] = rand() % 16;
+		host_input[i] = 1;
+		//host_input[i] = rand() % 16;
 	}
 
 	// Initialize mask with ints between 0~15
 	srand((unsigned int)time(NULL));		// Assigns seed to make random numbers change
 	for (int i = 0; i < mask_size; i++) {
-		//host_mask[i] = 1;
-		host_mask[i] = rand() % 16;
+		host_mask[i] = 1;
+		//host_mask[i] = rand() % 16;
 	}
 	
 	// Initialize output (result) and buffer matrix with 0s
@@ -223,7 +233,7 @@ int main(int argc, char* argv[]) {
 	checkCudaErrors(cudaStreamSynchronize(stream));
 	checkCudaErrors(cudaEventRecord(start, stream));
 
-	int nIter = 100;	// How many times to run kernel
+	int nIter = 1;	// How many times to run kernel
 
 	printf("\n\nStarting Convolution on GPU\n");
 
@@ -276,37 +286,34 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
-	////Start CPU timer
-	//double time_taken_cpu = 0.0;
-	//clock_t begin_cpu = clock();
+	//Start CPU timer
+	double time_taken_cpu = 0.0;
+	clock_t begin_cpu = clock();
 
-	//// Calculate histogram on CPU
-	//printf("\nStarting Histogram Computation on CPU\n");
-	//for (int i = 0; i < nIter; i++) {		// Repeat CPU computation same amount of times as GPU computation
-	//	Histogram_CPU(host_input, input_size, bin_size, host_bins_cpu);
-	//}
-	//printf("\nCPU Histogram Computation Complete\n");
+	// Calculate histogram on CPU
+	printf("\nStarting Histogram Computation on CPU\n");
+	for (int i = 0; i < nIter; i++) {		// Repeat CPU computation same amount of times as GPU computation
+		Convolution_CPU(host_input, host_mask, host_output_cpu, input_x, input_y, mask_size);
+	}
+	printf("\nCPU Histogram Computation Complete\n");
 
-	//clock_t end_cpu = clock();
-	//time_taken_cpu += ((double)(end_cpu - begin_cpu) / CLOCKS_PER_SEC * 1000) / nIter;	// in milliseconds
-	//printf("\nCPU Histogram Computation took %.3f msec\n", time_taken_cpu);
+	clock_t end_cpu = clock();
+	time_taken_cpu += ((double)(end_cpu - begin_cpu) / CLOCKS_PER_SEC * 1000) / nIter;	// in milliseconds
+	printf("\nCPU Histogram Computation took %.3f msec\n", time_taken_cpu);
 
-	//// Make sure bins from CPU have correct values
-	//for (int i = 0; i < num_bins; i++) {
-	//	host_bins_cpu[i] /= nIter;
-	//}
-
-	//// Print CPU results
-	//printf("\nCPU Results: \n");
-	//for (int i = 0; i < num_bins; i++) {
-	//	printf("\nBins %d = %u", i, host_bins_cpu[i]);
+	//// Make sure output matrix from CPU Convolution has correct values
+	//for (int i = 0; i < input_x * input_y; i++) {
+	//	host_output_cpu[i] /= nIter;
 	//}
 
-	//int sum_bins_cpu = 0;
-	//for (int i = 0; i < num_bins; i++) {
-	//	sum_bins_cpu += host_bins_cpu[i];
-	//}
-	//printf("\n\nSummation of all the bins = %d\n", sum_bins_cpu);
+	// Print CPU results
+	printf("\nCPU Results: \n");
+	for (int i = 0; i < input_x * input_y; i++) {
+		printf("%d\t", host_output_cpu[i]);
+		if ((i + 1) % input_x == 0) {		// At end of each row make a new line
+			printf("\n");
+		}
+	}
 
 	//// Check if GPU and CPU histograms match
 	//bool check = 0;
