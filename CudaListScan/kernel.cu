@@ -20,10 +20,10 @@
 #include <math.h>	// for power function
 
 // Thread block size
-#define BLOCK_SIZE 256
+#define BLOCK_SIZE 2048 / 2
 
-// Statically allocate shared memory
-#define SHARED_MEM_SIZE 256 * 4		// Size of each thread block * Size of int
+// Section size
+#define SECTION_SIZE 2048
 
 // Number of iterations for GPU and CPU List Scans
 #define NITER 100
@@ -32,29 +32,28 @@
 __global__ void ListScan_GPU(unsigned int* device_input, unsigned int* device_output, unsigned int input_size) {
 
 	// Shared memory
-	__device__ __shared__ int device_output_shared[SHARED_MEM_SIZE];
-	for (unsigned int i = 0; i < SHARED_MEM_SIZE; i++) {
+	__device__ __shared__ int device_output_shared[SECTION_SIZE];
+	for (unsigned int i = 0; i < SECTION_SIZE; i++) {
 		device_output_shared[i] = device_input[i];
 	}
 
 	for (unsigned int stride = 1; stride <= BLOCK_SIZE; stride *= 2) {
 		int index = (threadIdx.x + 1) * stride * 2 - 1;
-		if (index < 2 * BLOCK_SIZE) {
+		if (index < SECTION_SIZE) {
 			device_output_shared[index] += device_output_shared[index - stride];
 		}
 		__syncthreads();
 	}
 
 	for (unsigned int stride = BLOCK_SIZE / 2; stride > 0; stride /= 2) {
-		__syncthreads();
 		int index = (threadIdx.x + 1) * stride * 2 - 1;
-		if (index + stride < 2 * BLOCK_SIZE) {
+		if (index + stride < SECTION_SIZE) {
 			device_output_shared[index + stride] += device_output_shared[index];
 		}
+		__syncthreads();
 	}
-	__syncthreads();
 
-	for (unsigned int i = 0; i < SHARED_MEM_SIZE; i++) {
+	for (unsigned int i = 0; i < SECTION_SIZE; i++) {
 		if (i < input_size) {
 			device_output[i] = device_output_shared[i];
 		}
