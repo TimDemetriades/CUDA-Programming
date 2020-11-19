@@ -25,13 +25,49 @@
 // Statically allocate shared memory
 #define SHARED_MEM_SIZE 256 * 4		// Size of each thread block * Size of int
 
+// Number of iterations for GPU and CPU List Scans
+#define NITER 100
+
 // Kernel function for List Scan
 __global__ void ListScan_GPU(unsigned int* device_input, unsigned int* device_output, unsigned int input_size) {
 
+	// Shared memory
+	__device__ __shared__ int device_output_shared[SHARED_MEM_SIZE];
+	for (unsigned int i = 0; i < SHARED_MEM_SIZE; i++) {
+		device_output_shared[i] = device_input[i];
+	}
+
+	for (unsigned int stride = 1; stride <= BLOCK_SIZE; stride *= 2) {
+		int index = (threadIdx.x + 1) * stride * 2 - 1;
+		if (index < 2 * BLOCK_SIZE) {
+			device_output_shared[index] += device_output_shared[index - stride];
+		}
+		__syncthreads();
+	}
+
+	for (unsigned int stride = BLOCK_SIZE / 2; stride > 0; stride /= 2) {
+		__syncthreads();
+		int index = (threadIdx.x + 1) * stride * 2 - 1;
+		if (index + stride < 2 * BLOCK_SIZE) {
+			device_output_shared[index + stride] += device_output_shared[index];
+		}
+	}
+	__syncthreads();
+
+	for (unsigned int i = 0; i < SHARED_MEM_SIZE; i++) {
+		if (i < input_size) {
+			device_output[i] = device_output_shared[i];
+		}
+	}
 }
 
-void ListScan_CPU(unsigned int* host_input, unsigned int* host_output, unsigned int input_size) {
-
+void ListScan_CPU(unsigned int* host_input, unsigned int* host_output_cpu, unsigned int input_size) {
+	int accumulator = host_input[0];		// Set accumulator to first value of input
+	host_output_cpu[0] = accumulator;			// Set first value of output to accumulator
+	for (int i = 1; i < input_size; i++) {
+		accumulator += host_input[i];		// Accumulator = accumulator + current input(next value)
+		host_output_cpu[i] = accumulator;		// Current output = accumulator
+	}
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -46,7 +82,7 @@ int main(int argc, char* argv[]) {
 		}
 		// Set input size
 		input_size = atoi(argv[2]);
-		printf("\nThe input is %d integers long.\n", input_size);
+		printf("\nThe input is %d integers long\n", input_size);
 	}
 	else if (argc > 3) {
 		printf("\nToo many arguments provided.\nEnter arguments like this: \n");
@@ -64,36 +100,39 @@ int main(int argc, char* argv[]) {
 
 	// Allocate host memory for input and output
 	unsigned int* host_input;
-	unsigned int host_output;
+	unsigned int* host_output;
 	unsigned int* host_output_cpu;
 	host_input = (unsigned int*)malloc(input_bytes);
-	host_output = (unsigned int)malloc(sizeof(int));		// output is just a single int
-	host_output_cpu = (unsigned int*)malloc(sizeof(int));
+	host_output = (unsigned int*)malloc(input_bytes);		// output is just a single int
+	host_output_cpu = (unsigned int*)malloc(input_bytes);
 
 	// Allocate device memory for input and output
 	unsigned int* device_input;
-	unsigned int device_output;
+	unsigned int* device_output;
 	checkCudaErrors(cudaMalloc((void**)&device_input, input_bytes));
-	checkCudaErrors(cudaMalloc(&device_output, sizeof(int)));
+	checkCudaErrors(cudaMalloc((void**)&device_output, input_bytes));
 
 	// Initialize input with random ints between 0~1024
 	srand((unsigned int)time(NULL));		// Assigns seed to make random numbers change
 	for (int i = 0; i < input_size; i++) {
-		//host_input[i] = rand() % 1024;		// Not including 1024
-		host_input[i] = 1;		// for testing
+		host_input[i] = rand() % 1024;		// Not including 1024
+		//host_input[i] = 1;		// for testing
 	}
 
 	// Print input
+	printf("\nInput:\n");
 	for (int i = 0; i < input_size; i++) {
-		printf("%d\t", host_input[i]);
+		printf("\nValue[%d] = %u", i, host_input[i]);
 	}
 
 	// Copy input values from host to device
 	checkCudaErrors(cudaMemcpy(device_input, host_input, input_bytes, cudaMemcpyHostToDevice));		//dest, source, size in bytes, direction of transfer
 
 	// Set grid and thread block sizes
-	int block_size = BLOCK_SIZE;						// Threads per block
-	int grid_size = ceil(input_size / block_size);		// Blocks per grid
+	int block_size = BLOCK_SIZE;							// Threads per block
+	int grid_size = ceil(input_size / block_size) + 1;		// Blocks per grid
+	dim3 dim_block(block_size);
+	dim3 dim_grid(grid_size);
 
 	// Record the start event (for timing GPU calculations)
 	cudaStream_t stream;
@@ -106,9 +145,9 @@ int main(int argc, char* argv[]) {
 	checkCudaErrors(cudaStreamSynchronize(stream));
 	checkCudaErrors(cudaEventRecord(start, stream));
 
-	int nIter = 1;	// How many times to run kernel
+	int nIter = NITER;	// How many times to run kernel
 
-	printf("\nStarting List Scan on GPU\n");
+	printf("\n\nStarting List Scan on GPU\n");
 
 	// Launch kernel (repeat nIter times so we can obtain average run time)
 	for (int i = 0; i < nIter; i++) {
@@ -132,10 +171,71 @@ int main(int argc, char* argv[]) {
 	printf("\nThreads per block = %d, Blocks per grid = %d, Total threads = %d\n", block_size, grid_size, block_size * grid_size);
 
 	// Copy matrix values from device to host
-	checkCudaErrors(cudaMemcpy(host_output, device_output, sizeof(int), cudaMemcpyDeviceToHost));
+	checkCudaErrors(cudaMemcpy(host_output, device_output, input_bytes, cudaMemcpyDeviceToHost));	//dest, source, size in bytes, direction of transfer
+
+	// Make sure GPU results are correct depending on number of iterations
+	for (int i = 0; i < input_size; i++) {
+		host_output[i] / nIter;
+	}
 
 	// Print GPU results
 	printf("\nGPU Results:\n");
-	printf("\nSum = %d", host_input[0]);
+	for (int i = 0; i < input_size; i++) {
+		printf("\nValue[%d] = %u", i, host_output[i]);
+		if (i == input_size - 1) {
+			printf("\n");
+		}
+	}
 
+	//Start CPU timer
+	double time_taken_cpu = 0.0;
+	clock_t begin_cpu = clock();
+
+	// Calculate list scan on CPU
+	printf("\nStarting List Scan on CPU\n");
+	for (int i = 0; i < nIter; i++) {		// Repeat CPU computation same amount of times as GPU computation
+		ListScan_CPU(host_input, host_output_cpu, input_size);
+	}
+	printf("\nCPU List Scan Complete\n");
+
+	clock_t end_cpu = clock();
+	time_taken_cpu += ((double)(end_cpu - begin_cpu) / CLOCKS_PER_SEC * 1000) / nIter;	// in milliseconds
+	printf("\nCPU List Scan took %.3f msec\n", time_taken_cpu);
+
+	// Make sure CPU results are correct depending on number of iterations
+	for (int i = 0; i < input_size; i++) {
+		host_output_cpu[i] / nIter;
+	}
+
+	// Print CPU results
+	printf("\nCPU Results:\n");
+	for (int i = 0; i < input_size; i++) {
+		printf("\nValue[%d] = %u", i, host_output_cpu[i]);
+		if (i == input_size - 1) {
+			printf("\n");
+		}
+	}
+
+	// Check if GPU and CPU results match
+	bool check = 0;
+	for (int i = 0; i < input_size; i++) {				// For every value in the outputs
+		if (host_output[i] != host_output_cpu[i]) {		// Check if they match and if not set a flag
+			check = 1;
+		}
+	}
+	if (check == 1) {
+		printf("\nGPU and CPU results do not match!\n");
+	}
+	else {
+		printf("\nGPU and CPU results match!\n");
+	}
+
+	// Free memory in device
+	cudaFree(device_input);
+	cudaFree(device_output);
+
+	// Free memory in host
+	free(host_input);
+	free(host_output);
+	free(host_output_cpu);
 }
