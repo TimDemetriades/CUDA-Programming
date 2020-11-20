@@ -20,10 +20,10 @@
 #include <math.h>	// for power function
 
 // Thread block size
-#define BLOCK_SIZE 2048 / 2
+#define BLOCK_SIZE 256 / 2
 
 // Section size
-#define SECTION_SIZE 2048
+#define SECTION_SIZE 256
 
 // Number of iterations for GPU and CPU List Scans
 #define NITER 100
@@ -33,29 +33,37 @@ __global__ void ListScan_GPU(unsigned int* device_input, unsigned int* device_ou
 
 	// Shared memory
 	__device__ __shared__ int device_output_shared[SECTION_SIZE];
-	for (unsigned int i = 0; i < SECTION_SIZE; i++) {
-		device_output_shared[i] = device_input[i];
+	int tid = 2 * blockIdx.x * blockDim.x + threadIdx.x;			// Set thread index
+	if (tid < input_size) {
+		device_output_shared[threadIdx.x] = device_input[tid];		// Move values from global to shared memory
+		if (tid + blockDim.x < input_size) {
+			device_output_shared[threadIdx.x + blockDim.x] = device_input[tid + blockDim.x];
+		}
 	}
 
+	// Reduction phase
 	for (unsigned int stride = 1; stride <= BLOCK_SIZE; stride *= 2) {
+		__syncthreads();
 		int index = (threadIdx.x + 1) * stride * 2 - 1;
 		if (index < SECTION_SIZE) {
 			device_output_shared[index] += device_output_shared[index - stride];
 		}
-		__syncthreads();
 	}
 
-	for (unsigned int stride = BLOCK_SIZE / 2; stride > 0; stride /= 2) {
+	// Post reduction reverse phase
+	for (unsigned int stride = SECTION_SIZE / 4; stride > 0; stride /= 2) {
+		__syncthreads();
 		int index = (threadIdx.x + 1) * stride * 2 - 1;
 		if (index + stride < SECTION_SIZE) {
 			device_output_shared[index + stride] += device_output_shared[index];
 		}
-		__syncthreads();
 	}
 
-	for (unsigned int i = 0; i < SECTION_SIZE; i++) {
-		if (i < input_size) {
-			device_output[i] = device_output_shared[i];
+	__syncthreads();
+	if (tid < input_size) {
+		device_output[tid] = device_output_shared[threadIdx.x];
+		if (tid + blockDim.x < input_size) {
+			device_output[tid + blockDim.x] = device_output_shared[threadIdx.x + blockDim.x];
 		}
 	}
 }
@@ -102,7 +110,7 @@ int main(int argc, char* argv[]) {
 	unsigned int* host_output;
 	unsigned int* host_output_cpu;
 	host_input = (unsigned int*)malloc(input_bytes);
-	host_output = (unsigned int*)malloc(input_bytes);		// output is just a single int
+	host_output = (unsigned int*)malloc(input_bytes);		
 	host_output_cpu = (unsigned int*)malloc(input_bytes);
 
 	// Allocate device memory for input and output
@@ -114,8 +122,8 @@ int main(int argc, char* argv[]) {
 	// Initialize input with random ints between 0~1024
 	srand((unsigned int)time(NULL));		// Assigns seed to make random numbers change
 	for (int i = 0; i < input_size; i++) {
-		host_input[i] = rand() % 1024;		// Not including 1024
-		//host_input[i] = 1;		// for testing
+		//host_input[i] = rand() % 1024;		// Not including 1024
+		host_input[i] = 1;		// for testing
 	}
 
 	// Print input
@@ -128,8 +136,8 @@ int main(int argc, char* argv[]) {
 	checkCudaErrors(cudaMemcpy(device_input, host_input, input_bytes, cudaMemcpyHostToDevice));		//dest, source, size in bytes, direction of transfer
 
 	// Set grid and thread block sizes
-	int block_size = BLOCK_SIZE;							// Threads per block
-	int grid_size = ceil(input_size / block_size) + 1;		// Blocks per grid
+	int block_size = BLOCK_SIZE;								// Threads per block
+	int grid_size = ceil(input_size / SECTION_SIZE) + 1;		// Blocks per grid
 	dim3 dim_block(block_size);
 	dim3 dim_grid(grid_size);
 
