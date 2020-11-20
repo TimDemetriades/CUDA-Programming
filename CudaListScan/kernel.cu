@@ -20,7 +20,7 @@
 #include <math.h>	// for power function
 
 // Thread block size
-#define BLOCK_SIZE 2048 / 2
+#define BLOCK_SIZE 2048 / 2		// block size is half section size
 
 // Section size
 #define SECTION_SIZE 2048
