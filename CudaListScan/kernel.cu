@@ -79,13 +79,13 @@ __global__ void ListScan_GPU_1(unsigned int* device_input, unsigned int* device_
 __global__ void ListScan_GPU_2(unsigned int* device_S, unsigned int input_size) {
 	
 	// Shared memory
-	__device__ __shared__ int device_output_shared[SECTION_SIZE];
+	__device__ __shared__ int device_S_shared[SECTION_SIZE];
 	int tid = 2 * blockIdx.x * blockDim.x + threadIdx.x;			// Set thread index
 	if (tid < input_size) {
-		device_output_shared[threadIdx.x] = device_S[tid];			// Move values from global to shared memory
+		device_S_shared[threadIdx.x] = device_S[tid];				// Move values from global to shared memory
 	}
 	if (tid + blockDim.x < input_size) {
-		device_output_shared[threadIdx.x + blockDim.x] = device_S[tid + blockDim.x];
+		device_S_shared[threadIdx.x + blockDim.x] = device_S[tid + blockDim.x];
 	}
 
 	// Reduction phase
@@ -93,7 +93,7 @@ __global__ void ListScan_GPU_2(unsigned int* device_S, unsigned int input_size) 
 		__syncthreads();
 		int index = (threadIdx.x + 1) * stride * 2 - 1;
 		if (index < SECTION_SIZE) {
-			device_output_shared[index] += device_output_shared[index - stride];
+			device_S_shared[index] += device_S_shared[index - stride];
 		}
 	}
 
@@ -102,25 +102,32 @@ __global__ void ListScan_GPU_2(unsigned int* device_S, unsigned int input_size) 
 		__syncthreads();
 		int index = (threadIdx.x + 1) * stride * 2 - 1;
 		if (index + stride < SECTION_SIZE) {
-			device_output_shared[index + stride] += device_output_shared[index];
+			device_S_shared[index + stride] += device_S_shared[index];
 		}
 	}
 
-	// Move output values from shared memory to global memory
+	// Move output S values from shared memory to global memory
 	__syncthreads();
 	if (tid < input_size) {
-		device_S[tid] = device_output_shared[threadIdx.x];
+		device_S[tid] = device_S_shared[threadIdx.x];
 	}
 	if (tid + blockDim.x < input_size) {
-		device_S[tid + blockDim.x] = device_output_shared[threadIdx.x + blockDim.x];
+		device_S[tid + blockDim.x] = device_S_shared[threadIdx.x + blockDim.x];
 	}
 }
 
 // Kernel function for List Scan (part 3)
-__global__ void ListScan_GPU_3(unsigned int* device_output, unsigned int* device_S) {
+__global__ void ListScan_GPU_3(unsigned int* device_output, unsigned int* device_S, unsigned int input_size) {
 
-	int tid = (blockIdx.x + 1) * blockDim.x + threadIdx.x;
-	device_output[tid] += device_S[blockIdx.x - 1];
+	int tid = 2 * blockIdx.x * blockDim.x + threadIdx.x;			// Set thread index
+
+	// Add output value with corresponding value in S array (making sure to skip first section)
+	if (tid < input_size && blockIdx.x != 0) {
+		device_output[tid] += device_S[blockIdx.x - 1];
+	}
+	if (tid + blockDim.x < input_size && blockIdx.x != 0) {
+		device_output[tid + blockDim.x] += device_S[blockIdx.x - 1];
+	}
 }
 
 // CPU Sequential List Scan (for comparing with GPU List Scan and veryfing results)
@@ -186,7 +193,7 @@ int main(int argc, char* argv[]) {
 	srand((unsigned int)time(NULL));		// Assigns seed to make random numbers change
 	for (int i = 0; i < input_size; i++) {
 		host_input[i] = rand() % 1024;		// Not including 1024
-		//host_input[i] = 1;		// for testing
+		//host_input[i] = 1;				// for testing
 	}
 
 	//// Print input
@@ -225,8 +232,8 @@ int main(int argc, char* argv[]) {
 	// Launch kernel (repeat nIter times so we can obtain average run time)
 	for (int i = 0; i < nIter; i++) {
 		ListScan_GPU_1 << <dim_grid, dim_block >> > (device_input, device_output, input_size, device_S);
-		//ListScan_GPU_2 << <dim_grid, dim_block >> > (device_S, input_size);
-		//ListScan_GPU_3 << <dim_grid, dim_block >> > (device_output, device_S);
+		ListScan_GPU_2 << <dim_grid, dim_block >> > (device_S, input_size);
+		ListScan_GPU_3 << <dim_grid, dim_block >> > (device_output, device_S, input_size);
 	}
 
 	printf("\n\GPU List Scan Complete\n");
